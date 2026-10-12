@@ -3616,12 +3616,12 @@
     </div>
 
     <!-- Cancel Confirmation Modal -->
-    <div id="cancel-confirm-modal" class="modal-overlay">
+    <div id="cancel-confirm-modal" class="modal-overlay" style="z-index: 1100;">
         <div class="modal-content">
             <div class="modal-header">
                 <h2>Confirm Cancellation</h2>
             </div>
-            <p style="margin: 0; font-size: var(--font-size-base); color: var(--text-muted);">Are you sure you want to cancel this delivery?</p>
+            <p id="cancel-confirm-message" style="margin: 0; font-size: var(--font-size-base); color: var(--text-muted);">Are you sure you want to cancel this delivery?</p>
             <div class="dialog-buttons">
                 <button id="cancel-modal-no" class="btn-secondary-action">No</button>
                 <button id="cancel-modal-yes" class="btn-warning">Yes, Cancel</button>
@@ -3798,6 +3798,7 @@
         let currentEntryType = 'delivery'; // 'delivery' or 'pickup'
         let activeDeleteId = null;
         let activeCancelId = null;
+        let activeCancelIsScheduled = false;
         let activeArchiveId = null;
         let activeNotesId = null;
 
@@ -4660,25 +4661,37 @@
 
         // Cancel Modal Events
         const cancelConfirmModal = document.getElementById('cancel-confirm-modal');
-        document.getElementById('cancel-modal-no').onclick = () => {
+        const cancelYesButton = document.getElementById('cancel-modal-yes');
+        function closeCancelConfirmation() {
             cancelConfirmModal.classList.remove('active');
             activeCancelId = null;
+            activeCancelIsScheduled = false;
+        }
+        document.getElementById('cancel-modal-no').onclick = () => {
+            if (!cancelYesButton.disabled) closeCancelConfirmation();
         };
-        document.getElementById('cancel-modal-yes').onclick = async () => {
-            if (activeCancelId) {
-                try {
-                    await updateDoc(doc(db, "deliveries", activeCancelId), {
+        cancelYesButton.onclick = async () => {
+            if (!activeCancelId || cancelYesButton.disabled) return;
+            const id = activeCancelId;
+            const isScheduled = activeCancelIsScheduled;
+            cancelYesButton.disabled = true;
+            try {
+                if (isScheduled) {
+                    await cancelScheduledEntry(id);
+                } else {
+                    await updateDoc(doc(db, 'deliveries', id), {
                         statusType: 'canceled',
                         canceledEpoch: Date.now()
                     });
-                    showSuccessPopup('Delivery canceled successfully.');
-                } catch (error) {
-                    console.error("Error canceling delivery: ", error);
-                    alert('Failed to cancel delivery.');
                 }
+                showSuccessPopup(isScheduled ? 'Scheduled delivery canceled successfully.' : 'Delivery canceled successfully.');
+                closeCancelConfirmation();
+            } catch (error) {
+                console.error('Error canceling delivery:', error);
+                alert(error.message || 'Failed to cancel delivery. Please try again.');
+            } finally {
+                cancelYesButton.disabled = false;
             }
-            cancelConfirmModal.classList.remove('active');
-            activeCancelId = null;
         };
 
         // Archive Modal Events
@@ -5210,6 +5223,7 @@
         syncEmployeeRoleFields();
 
         function handleUnifiedLogout(showPopup = true) {
+            closeCancelConfirmation();
             document.body.classList.remove('driver-logged-in');
             document.body.classList.remove('dealer-logged-in');
             document.body.classList.remove('admin-logged-in');
@@ -5504,6 +5518,10 @@
                     <button type="button" class="btn-secondary-action" data-sched-action="save" data-id="${safeId}">Save date</button>
                     ${isPickup ? '' : `<button type="button" class="btn-sched-confirm" data-sched-action="confirm" data-id="${safeId}">Confirm</button>`}
                 </div>`;
+            }
+
+            if (canCancelScheduledEntry(data)) {
+                actions += `<div class="sched-actions"><button type="button" class="btn-warning" data-sched-action="cancel" data-id="${safeId}">Cancel Delivery</button></div>`;
             }
 
             const tagClass = isPickup ? 'is-exempt' : confirmed ? 'is-confirmed' : 'is-unconfirmed';
@@ -6098,6 +6116,49 @@
             }
         });
 
+        function canCancelScheduledEntry(data) {
+            return document.body.classList.contains('dealer-logged-in') &&
+                !!currentSelectedStore && data.store === currentSelectedStore &&
+                data.entryType !== 'pickup' && !data.failed &&
+                !data.completionTimestamp && data.statusType !== 'canceled' &&
+                data.archived !== true && isDealerScheduledEntry(data, centralTodayDate());
+        }
+
+        function openScheduledCancel(id) {
+            const data = scheduledEntries.get(id);
+            if (!data || !canCancelScheduledEntry(data)) {
+                alert('This scheduled delivery cannot be canceled by your dealership.');
+                return;
+            }
+            activeCancelId = id;
+            activeCancelIsScheduled = true;
+            document.getElementById('cancel-confirm-message').textContent =
+                `Cancel scheduled delivery for ${data.customer || 'this customer'}${data.invoice ? ` (Invoice #${data.invoice})` : ''} on ${formatSchedDate(data.runDate)}? It will move to Canceled Deliveries.`;
+            cancelConfirmModal.classList.add('active');
+        }
+
+        async function cancelScheduledEntry(id) {
+            const ref = doc(db, 'deliveries', id);
+            // Recheck the current document so a completed or reassigned delivery
+            // cannot be canceled from an out-of-date scheduled card.
+            await runTransaction(db, async transaction => {
+                const snapshot = await transaction.get(ref);
+                if (!snapshot.exists() || !canCancelScheduledEntry(snapshot.data())) {
+                    throw new Error('This delivery is no longer available to cancel. Refresh the scheduled list.');
+                }
+                transaction.update(ref, {
+                    statusType: 'canceled',
+                    canceledEpoch: Date.now(),
+                    canceledBy: currentAdvisorName || null,
+                    canceledById: currentAdvisorId || null
+                });
+            });
+            scheduledEntries.delete(id);
+            schedPromptIds.delete(id);
+            schedPromptedIds.delete(id);
+            refreshScheduled(centralTodayDate());
+        }
+
         async function confirmScheduledEntry(id, btn) {
             const data = scheduledEntries.get(id);
             if (!data || !needsConfirmation(data) || data.confirmed === true) return;
@@ -6163,7 +6224,8 @@
             if (!btn) return;
             const id = btn.getAttribute('data-id');
             const action = btn.getAttribute('data-sched-action');
-            if (action === 'confirm') confirmScheduledEntry(id, btn);
+            if (action === 'cancel') openScheduledCancel(id);
+            else if (action === 'confirm') confirmScheduledEntry(id, btn);
             else if (action === 'save') saveScheduledDate(id, btn);
             else if (action === 'leave') {
                 schedPromptIds.delete(id);
@@ -6740,6 +6802,8 @@
                         return;
                     }
                     activeCancelId = id;
+                    activeCancelIsScheduled = false;
+                    document.getElementById('cancel-confirm-message').textContent = 'Are you sure you want to cancel this delivery?';
                     cancelConfirmModal.classList.add('active');
                 };
             }
