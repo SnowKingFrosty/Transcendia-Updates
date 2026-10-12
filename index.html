@@ -1913,9 +1913,6 @@
             gap: 0.65rem;
         }
         .driver-duty-card {
-            display: flex;
-            align-items: center;
-            gap: 0.75rem;
             min-width: 0;
             padding: 0.75rem;
             border: 1px solid var(--border-color);
@@ -1923,6 +1920,29 @@
             border-radius: 6px;
             background: var(--card-bg);
         }
+        .driver-duty-card summary {
+            display: flex;
+            align-items: center;
+            gap: 0.75rem;
+            cursor: pointer;
+            list-style: none;
+            border-radius: 4px;
+        }
+        .driver-duty-card summary::-webkit-details-marker { display: none; }
+        .driver-duty-card summary:focus-visible { outline: 2px solid var(--success); outline-offset: 4px; }
+        .driver-duty-phone {
+            margin-top: 0.7rem;
+            padding-top: 0.6rem;
+            border-top: 1px solid var(--border-color);
+            color: var(--text-main);
+            overflow-wrap: anywhere;
+        }
+        .driver-duty-card[open] .driver-duty-hint { display: none; }
+        .emp-phone-form { display: flex; flex-wrap: wrap; align-items: end; gap: 0.4rem; margin-top: 0.5rem; }
+        .emp-phone-form label { display: flex; flex: 1 1 130px; min-width: 0; flex-direction: column; gap: 0.25rem; color: var(--text-muted); font-size: 0.75rem; }
+        .emp-phone-form input { width: 100%; min-width: 0; box-sizing: border-box; background: var(--item-bg); color: var(--text-main); border: 1px solid var(--border-color); border-radius: 6px; padding: 0.5rem; font-size: var(--font-size-base); }
+        .emp-phone-form input:focus { outline: 2px solid var(--primary); outline-offset: 1px; }
+        .emp-phone-form button { padding: 0.4rem 0.6rem; font-size: 0.75rem; }
         .driver-duty-zone {
             display: grid;
             flex: 0 0 42px;
@@ -3558,6 +3578,10 @@
                             <option value="Nissan/Kia">Nissan/Kia (Zone 11)</option>
                         </select>
                     </div>
+                    <div class="form-group" id="emp-phone-group" hidden>
+                        <label for="emp-phone-input">Driver Phone Number (optional)</label>
+                        <input type="tel" id="emp-phone-input" placeholder="e.g. (555) 123-4567" autocomplete="tel" maxlength="40" disabled>
+                    </div>
                     <button type="submit" class="btn-primary reg-submit-btn">Register Employee</button>
                 </form>
             </section>
@@ -3859,6 +3883,7 @@
         onSnapshot(collection(db, "employees"), (snap) => {
             employeesCache = snap.docs.map(d => ({ id: d.id, ...d.data() }));
             renderEmployeeList();
+            renderDriversOnDuty();
         });
 
         function renderEmployeeList() {
@@ -3910,6 +3935,27 @@
                         : `<div class="zone-roster-empty">No employees registered yet.</div>`}
                 </article>`;
             }).join('');
+
+            listEl.querySelectorAll('.emp-phone-form').forEach(form => {
+                form.onsubmit = async event => {
+                    event.preventDefault();
+                    if (!supportUser || supportUser.role !== 'admin') return;
+                    const emp = employeesCache.find(employee => employee.id === form.dataset.id);
+                    if (!emp || emp.role !== 'driver') return;
+                    const phoneNumber = form.querySelector('input').value.trim();
+                    const button = form.querySelector('button');
+                    button.disabled = true;
+                    try {
+                        await updateDoc(doc(db, 'employees', emp.id), { phoneNumber });
+                        showSuccessPopup(phoneNumber ? 'Driver phone number saved.' : 'Driver phone number cleared.');
+                    } catch (error) {
+                        console.error('Error saving driver phone:', error);
+                        alert('Failed to save phone number. Please try again.');
+                    } finally {
+                        button.disabled = false;
+                    }
+                };
+            });
 
             listEl.querySelectorAll('.emp-remove-btn').forEach(btn => {
                 btn.onclick = async () => {
@@ -3964,6 +4010,13 @@
                     <div class="employee-row-info">
                         <span class="employee-row-name">${escapeHtml(emp.name || 'Unnamed')} <span class="employee-role-tag ${isDriver ? 'driver' : 'dealer'}">${roleLabel}</span></span>
                         <span class="employee-row-meta">ID <span class="employee-id-pill">${escapeHtml(emp.employeeId)}</span>${isDriver ? ` &middot; ${escapeHtml(assignment)}` : ''}</span>
+                        ${isDriver ? `
+                        <form class="emp-phone-form" data-id="${escapeHtml(emp.id)}">
+                            <label>Phone number
+                                <input type="tel" name="phoneNumber" value="${escapeHtml(emp.phoneNumber || '')}" placeholder="Add driver phone" autocomplete="tel" maxlength="40" aria-label="Phone number for ${escapeHtml(emp.name || 'driver')}">
+                            </label>
+                            <button class="btn-secondary-action" type="submit">Save Phone</button>
+                        </form>` : ''}
                     </div>
                     <div class="employee-row-actions">
                         <button class="btn-secondary-action emp-reset-pw-btn" type="button" data-id="${emp.id}"
@@ -4724,6 +4777,14 @@
         const driversOnDutyGrid = document.getElementById('drivers-on-duty-grid');
         const driversOnDutyCount = document.getElementById('drivers-on-duty-count');
 
+        const expandedDriverPhones = new Set();
+        driversOnDutyGrid.addEventListener('toggle', event => {
+            const card = event.target.closest('.driver-duty-card');
+            if (!card) return;
+            if (card.open) expandedDriverPhones.add(card.dataset.driverId);
+            else expandedDriverPhones.delete(card.dataset.driverId);
+        }, true);
+
         function renderDriversOnDuty() {
             const activeCutoff = Date.now() - 5 * 60 * 1000;
             const drivers = onDutySessions
@@ -4732,14 +4793,24 @@
 
             driversOnDutyCount.textContent = `${drivers.length} ${drivers.length === 1 ? 'driver' : 'drivers'}`;
             driversOnDutyGrid.innerHTML = drivers.length
-                ? drivers.map(driver => `
-                    <article class="driver-duty-card">
-                        <span class="driver-duty-zone">Zone ${escapeHtml(String(driver.zone))}</span>
-                        <div class="driver-duty-info">
-                            <div class="driver-duty-name">${escapeHtml(driver.name || 'Driver')}</div>
-                            <div class="driver-duty-status">On duty</div>
-                        </div>
-                    </article>`).join('')
+                ? drivers.map(driver => {
+                    const driverId = normalizeId(driver.userId);
+                    const employee = findEmployee(driverId);
+                    const phone = employee && employee.role === 'driver' ? String(employee.phoneNumber || '').trim() : '';
+                    return `
+                    <details class="driver-duty-card" data-driver-id="${escapeHtml(driverId)}" ${expandedDriverPhones.has(driverId) ? 'open' : ''}>
+                        <summary aria-label="Show or hide phone number for ${escapeHtml(driver.name || 'Driver')}">
+                            <span class="driver-duty-zone">Zone ${escapeHtml(String(driver.zone))}</span>
+                            <div class="driver-duty-info">
+                                <div class="driver-duty-name">${escapeHtml(driver.name || 'Driver')}</div>
+                                <div class="driver-duty-status">On duty <span class="driver-duty-hint">&middot; Tap to view phone</span></div>
+                            </div>
+                        </summary>
+                        <div class="driver-duty-phone">${phone
+                            ? `Phone: ${escapeHtml(phone)}`
+                            : 'No phone number added yet.'}</div>
+                    </details>`;
+                }).join('')
                 : '<p class="drivers-on-duty-empty">No drivers are currently on duty.</p>';
         }
 
@@ -5078,6 +5149,7 @@
             const role = document.getElementById('emp-role-select').value;
             const store = document.getElementById('emp-store-select').value;
             const zone = dealerZoneMapping[store] || null;
+            const phoneNumber = role === 'driver' ? document.getElementById('emp-phone-input').value.trim() : '';
 
             if (!employeeId || !name || !role || !store) {
                 alert('Please complete every field to register an employee.');
@@ -5095,9 +5167,11 @@
                     role,
                     store,
                     zone,
+                    phoneNumber,
                     createdAt: Date.now()
                 });
                 employeeRegisterForm.reset();
+                syncEmployeeRoleFields();
                 document.getElementById('emp-store-label').textContent = 'Assigned Dealership';
                 showSuccessPopup(role === 'driver'
                     ? `${name} registered as Driver (Zone ${zone}).`
@@ -5110,10 +5184,14 @@
 
         // A driver's dealership selection represents the delivery zone they
         // cover, so relabel the field to make that clear during registration.
-        document.getElementById('emp-role-select').onchange = function() {
-            document.getElementById('emp-store-label').textContent =
-                this.value === 'driver' ? 'Assigned Zone' : 'Assigned Dealership';
-        };
+        function syncEmployeeRoleFields() {
+            const isDriver = document.getElementById('emp-role-select').value === 'driver';
+            document.getElementById('emp-store-label').textContent = isDriver ? 'Assigned Zone' : 'Assigned Dealership';
+            document.getElementById('emp-phone-group').hidden = !isDriver;
+            document.getElementById('emp-phone-input').disabled = !isDriver;
+        }
+        document.getElementById('emp-role-select').onchange = syncEmployeeRoleFields;
+        syncEmployeeRoleFields();
 
         function handleUnifiedLogout(showPopup = true) {
             document.body.classList.remove('driver-logged-in');
