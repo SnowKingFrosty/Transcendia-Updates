@@ -494,6 +494,34 @@
         body.driver-logged-in #chat-fab {
             display: inline-flex;
         }
+        /* Coriva watermark beneath the main chat button. */
+        #coriva-watermark {
+            position: fixed;
+            right: 1.1rem;
+            bottom: calc(0.75rem + env(safe-area-inset-bottom, 0px));
+            z-index: 900;
+            display: none;
+            align-items: center;
+            justify-content: center;
+            gap: 0.35rem;
+            min-height: 28px;
+            padding: 0.2rem 0.45rem;
+            border-radius: 6px;
+            background: rgba(15, 23, 42, 0.65);
+            color: #fff;
+            font-size: 0.65rem;
+            line-height: 1;
+            text-decoration: none;
+            opacity: 0.7;
+            transition: opacity 0.15s ease;
+        }
+        body.dealer-logged-in #coriva-watermark,
+        body.driver-logged-in #coriva-watermark { display: inline-flex; }
+        #coriva-watermark:hover,
+        #coriva-watermark:focus-visible { opacity: 1; }
+        #coriva-watermark:focus-visible { outline: 2px solid var(--primary); outline-offset: 3px; }
+        #coriva-watermark img { display: block; width: 24px; height: 24px; object-fit: contain; }
+
         #chat-fab:hover { transform: translateY(-2px); background-color: #2f74e0; }
         #chat-fab svg { width: 20px; height: 20px; fill: currentColor; }
         #chat-fab .chat-unread {
@@ -7810,6 +7838,10 @@
             <span id="chat-dot-blue" class="chat-dot blue" title="You were tagged"></span>
         </span>
     </button>
+    <a id="coriva-watermark" href="https://coriva.space/?profile=aasPvpIuUjeFqezudNFRBaNhTYI3" target="_blank" rel="noopener noreferrer" aria-label="Visit Coriva profile (opens in a new tab)">
+        <img src="coriva-logo.png" alt="Coriva" width="24" height="24" />
+        <span>coriva.space</span>
+    </a>
     <div id="chat-panel" role="dialog" aria-label="Team chat">
         <div class="chat-header">
             <div class="chat-header-title">
